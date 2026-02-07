@@ -1,26 +1,33 @@
 import numpy as np
+import matplotlib.pyplot as plt
+from pos import graph
 
 
-def LinearMesh(L,Ne,x0=0.0):
+# Funciones para generar mallados uniformes
+def GenBarMesh_1D(L,ne,x0=0.0):
     '''
     Función que retorna nodos y conexiones para elementos finitos en 1D.
-
     Donde:
             L:      Longitud total de la barra.
             Ne:     Número de elementos a crear.
             x0:     Posición del primer nodo.
     '''
     # Crea arreglo de nodos
-    x = np.linspace(x0,x0+L,Ne+1)
+    x = np.linspace(x0,x0+L,ne+1)
     # Crea arreglo de conexiones
-    cnx = np.zeros((Ne,2),'i4')
-    cnx[:,0],cnx[:,1] = range(Ne), range(1,Ne+1)
+    cnx = np.zeros((ne,2),'i4')
+    cnx[:,0],cnx[:,1] = range(ne), range(1,ne+1)
     class Mesh:
         NN = len(x)
         Nodos = x
         NC = len(cnx)
         Conex = cnx
     return Mesh
+
+def LinearMesh(L,Ne,x0=0):
+    print("error: esta función ya no existe. Utilizar la función GenBarMesh_1D")
+    return
+
 
 def GenQuadMesh_2D(Lx, Ly, ne):
     '''
@@ -134,4 +141,119 @@ def GenBrickMesh_3D(L, B, H, lc):
         Conex = connect
     return Mesh
 
-    
+
+# Funciones para generar mallado a partir de pares de puntos en 3D (volumenes)
+# para elementos hexahedro, tetra, tetra10
+# para incrementar el orden se puede utilizar gmsh
+
+
+# Las siguientes funciones son para generar un mallado en 2D
+# a partir de una mube de puntos "delaunay_2d"
+def checkCircumference(tri,xi,yi):
+    '''
+    Función que obtiene un parámetro que determina si el punto (xi,yi) se
+    encuentra dentro de la circunferencia de un triángulo.
+    '''
+    a11 = tri[0,0]-xi; a12 = tri[0,1]-yi
+    a21 = tri[1,0]-xi; a22 = tri[1,1]-yi
+    a31 = tri[2,0]-xi; a32 = tri[2,1]-yi
+    d2 = xi*xi + yi*yi
+    a13 = tri[0,0]*tri[0,0] + tri[0,1]*tri[0,1] - d2
+    a23 = tri[1,0]*tri[1,0] + tri[1,1]*tri[1,1] - d2
+    a33 = tri[2,0]*tri[2,0] + tri[2,1]*tri[2,1] - d2
+    det = a11*(a22*a33-a23*a32) - a12*(a21*a33-a23*a31) + a13*(a21*a32-a22*a31)
+    return det
+
+def getPolygon(xyo,elems,xd):
+    '''
+    Función que genera un poligono uniendo elementos triangulares.
+    Donde:
+            xyo:        Circumcentro
+            elems:      Arreglo relacionados al circumcentro que contiene \
+                        la conexión de los elementos a unir.
+            xd:         Arreglo que contiene las coordenadas de todos los nodos.  
+            pol:        Arreglo que contiene los nodos del polígono generado.  
+    '''
+    pol = elems[0]
+    for e in elems[1:]:
+        pol = np.append(pol,e)
+    pol = np.unique(pol)
+    ang = np.zeros(len(pol))
+    for i in range(len(pol)):
+        x1,y1 = xd[pol[i]]
+        ang[i] = np.arctan2(y1-xyo[1],x1-xyo[0])
+    args = ang.argsort()
+    pol = pol[args]
+    return np.append(pol,pol[0])
+
+def triArea(coor):
+    x,y = coor[:,0],coor[:,1]
+    area = 0.5*( x[0]*(y[1]-y[2]) + x[1]*(y[2]-y[0]) + x[2]*(y[0]-y[1]) )
+    return area
+
+def updateMesh(xyo,xd,elems,selec):
+    '''
+    Función que actualiza el Mesh (agrega elementos y nodos).
+    '''
+    local_elems = elems[selec]
+    if len(local_elems)==0: print('*'*20+'No triangle found!'+'*'*20)
+    else: pol = getPolygon(xyo,local_elems,xd)
+    elems2 = np.delete(elems, selec, axis=0)
+    xd = np.append(xd,[xyo],axis=0)
+    for i in range(len(pol)-1):
+        temp = [len(xd)-1,pol[i],pol[i+1]]
+        ar = triArea(xd[temp])
+        if ar == 0.0: continue # Area of element is zero
+        elems2 = np.append(elems2,[temp],axis=0)
+    return xd,elems2
+
+def delaunay_2d(coor,steps=False):
+    '''
+    Función que genera un Mesh uniforme basado en la triangulación de Delaunay \
+    a partir de coordenadas.
+    '''
+    print("Triangulación de Delaunay ...")
+    maxX,maxY = max(coor[:,0]),max(coor[:,1])
+    minX,minY = min(coor[:,0]),min(coor[:,1])
+
+    xi = minX - 0.1*(maxX-minX)
+    yi = minY - 0.1*(maxY-minY)
+    xf = maxX + 0.1*(maxX-minX)
+    yf = maxY + 0.1*(maxY-minY)
+
+    x = np.array([[xi,yi],[xf,yi],[xf,yf],[xi,yf]])
+    cnx = np.array([[0,1,2],[0,2,3]])
+    for i in range(len(coor)):
+        # print('node %i: (%8.5f,%8.5f)'%(i,coor[i,0],coor[i,1]))
+        ie = 0
+        selec =[]
+        for e in cnx:
+            xe = x[e]
+            det = checkCircumference(xe,coor[i,0],coor[i,1])
+            if det >= -1e-8:
+                selec.append(ie)
+                # print('The point %i is inside circle of element %i :D'%(i,ie))
+            else:
+                pass
+                # print('The point %i is out of circle of element %i :('%(i,ie))
+            ie += 1
+        x,cnx = updateMesh(coor[i],x,cnx,selec)
+        if steps: 
+            fig, ax = plt.subplots(dpi=150)
+            graph(x,cnx,ax,logo=False,labels=True)
+            plt.axis('off'); plt.tight_layout(); plt.show()
+    x = coor
+    selec = []
+    for ie in range(len(cnx)):
+        for n in cnx[ie]:
+            if n<=3:
+                selec.append(ie)
+                break
+    cnx = np.delete(cnx, selec, axis=0)-4
+    print("Terminó la triangulación.")
+    return cnx
+
+def delaunay(coor,steps=False):
+    print("error: esta función ya no existe. Utilizar la función delaunay_2d")
+    return
+
